@@ -1,21 +1,7 @@
---!strict
--- Allison Lua loader | private repo jatosm/loader
---
--- Executor usage (repo is private, so the FIRST fetch needs a token):
---   loadstring(game:HttpGet("https://<TOKEN>@raw.githubusercontent.com/jatosm/loader/main/loader.lua"))()
--- Use a fine-grained PAT with contents:read on jatosm/loader only.
--- For later fetches you can set it once instead:
---   _G.ALLISON_TOKEN = "github_pat_..."
---
--- What it does:
---   1. Downloads smallest-pixel-7.ttf (public URL, no auth needed),
---      caches it via writefile, exposes Font via _G.ALLISON_FONT.
---   2. Downloads CONFIG.PayloadPath raw from this repo and runs it.
-
 local CONFIG = {
 	Repo = "jatosm/loader",
 	Branch = "main",
-	PayloadPath = "menu.lua", -- push your main script under this path, or change it here
+	PayloadPath = "menu.lua", 
 	FontUrl = "https://raw.githubusercontent.com/britzl/gbrausers/master/assets/font/smallest_pixel-7.ttf",
 	FontFile = "smallest-pixel-7.ttf",
 	Timeout = 6,
@@ -60,7 +46,7 @@ local function fetch(url: string, useAuth: boolean): string
 		end
 		return body
 	end
-	-- game:HttpGet sends no headers, so private files 404 here.
+	
 	return game:HttpGet(url)
 end
 
@@ -70,7 +56,6 @@ end
 
 print("[Allison] loader start; repo=" .. CONFIG.Repo)
 
--- 1. Font (public URL, no auth needed).
 local fontAsset: string? = nil
 do
 	local isfileFn = G.isfile
@@ -110,7 +95,6 @@ do
 	end
 end
 
--- 2. Payload: download raw and run it.
 if CONFIG.PayloadPath == "" then
 	warn("[Allison] no PayloadPath set, nothing to run")
 else

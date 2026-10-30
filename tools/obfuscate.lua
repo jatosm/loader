@@ -1,17 +1,3 @@
--- allison-obf v1 -- custom Lua/Luau obfuscator
--- usage: lua obfuscate.lua <input.lua> [output.lua]
---
--- Layers (all custom, all reversible by a determined reader -- this only
--- raises the cost of reading, it cannot make reversing impossible):
---   1. comment strip (keeps a leading --!strict line)
---   2. local renamer (___ + Il1 alphabet, declaration-driven, member-safe)
---   3. per-string caesar crypt (decimal escapes, runtime decoder)
---   4. integer split (N -> (N+K)-K)
---   5. dead-code junk (never-executed if-false blocks)
--- Limits: no [[ ]] long strings, don't name locals the same as table
--- keys you index with dot, input must already run where output will run
--- (Luau type annotations are passed through untouched).
-
 local function readAll(p)
 	local f = assert(io.open(p, "rb"))
 	local s = f:read("*a")
@@ -41,7 +27,6 @@ src = src:gsub("\r\n", "\n")
 
 local strict = src:match("^%-%-!strict[^\n]*\n") or ""
 
--- 1. stash string literals with a hand scanner (no quantified groups).
 local bank = {}
 local function stashAll(s)
 	local out, i, n = {}, 1, #s
@@ -85,11 +70,9 @@ local function stashAll(s)
 end
 src = stashAll(src)
 
--- 2. strip comments.
 src = src:gsub("%-%-%[%[.-%]%]", "")
 src = src:gsub("%-%-[^\n]*", "")
 
--- 3. integer split (padded so start-of-string matches; skips floats/hex/members).
 src = " " .. src
 local ints = 0
 src = src:gsub("([^%w_%.:])(%d+)(%f[^%w%.])", function(pre, n)
@@ -99,7 +82,6 @@ src = src:gsub("([^%w_%.:])(%d+)(%f[^%w%.])", function(pre, n)
 end)
 src = src:sub(2)
 
--- 4. collect declared locals, then rename (never touches .member / :method).
 local kw = {
 	["local"] = 1, ["function"] = 1, ["for"] = 1, ["in"] = 1, ["if"] = 1,
 	["then"] = 1, ["else"] = 1, ["elseif"] = 1, ["end"] = 1, ["do"] = 1,
@@ -149,8 +131,6 @@ for _, n in ipairs(order) do
 end
 src = src:sub(2, -2)
 
--- 5. runtime decoder first (fresh names can't collide: checked above),
--- then restore every string encrypted, then dead-code junk.
 local dec = fresh()
 local head = {}
 head[#head + 1] = "local " .. dec .. "=function(s,k) local t={} for i=1,#s do t[i]=string.char((string.byte(s,i)-k)%256) end return table.concat(t) end"
