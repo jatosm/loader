@@ -11,12 +11,18 @@ local function writeAll(p, s)
 	f:close()
 end
 
-local inPath = ...
+local args = { ... }
+local envelope = true
+if args[1] == "--raw" then
+	envelope = false
+	table.remove(args, 1)
+end
+local inPath = args[1]
 if not inPath then
-	print("usage: lua obfuscate.lua <input.lua> [output.lua]")
+	print("usage: lua obfuscate.lua [--raw] <input.lua> [output.lua]")
 	os.exit(1)
 end
-local outPath = select(2, ...) or (inPath .. ".obf.lua")
+local outPath = args[2] or (inPath .. ".obf.lua")
 
 math.randomseed(os.time() + #inPath)
 
@@ -28,6 +34,10 @@ src = src:gsub("\r\n", "\n")
 local strict = src:match("^%-%-!strict[^\n]*\n") or ""
 
 local bank = {}
+local escmap = {
+	n = "\n", t = "\t", r = "\r", a = "\a", b = "\b", f = "\f", v = "\v",
+	["\\"] = "\\", ['"'] = '"', ["'"] = "'",
+}
 local function stashAll(s)
 	local out, i, n = {}, 1, #s
 	while i <= n do
@@ -41,8 +51,23 @@ local function stashAll(s)
 					if j >= n then
 						break
 					end
-					buf[#buf + 1] = d .. s:sub(j + 1, j + 1)
-					j = j + 2
+					local e = s:sub(j + 1, j + 1)
+					if e == "\n" then
+						j = j + 2
+					elseif escmap[e] then
+						buf[#buf + 1] = escmap[e]
+						j = j + 2
+					elseif e:match("%d") then
+						local k = j + 1
+						while k <= j + 3 and s:sub(k, k):match("%d") do
+							k = k + 1
+						end
+						buf[#buf + 1] = string.char(tonumber(s:sub(j + 1, k - 1), 10) % 256)
+						j = k
+					else
+						buf[#buf + 1] = e
+						j = j + 2
+					end
 				elseif d == c then
 					closed = true
 					break
@@ -83,11 +108,12 @@ end)
 src = src:sub(2)
 
 local kw = {
-	["local"] = 1, ["function"] = 1, ["for"] = 1, ["in"] = 1, ["if"] = 1,
-	["then"] = 1, ["else"] = 1, ["elseif"] = 1, ["end"] = 1, ["do"] = 1,
-	["while"] = 1, ["repeat"] = 1, ["until"] = 1, ["return"] = 1,
-	["break"] = 1, ["true"] = 1, ["false"] = 1, ["nil"] = 1,
-	["and"] = 1, ["or"] = 1, ["not"] = 1,
+	["local"] = true, ["function"] = true, ["for"] = true, ["in"] = true,
+	["if"] = true, ["then"] = true, ["else"] = true, ["elseif"] = true,
+	["end"] = true, ["do"] = true, ["while"] = true, ["repeat"] = true,
+	["until"] = true, ["return"] = true, ["break"] = true, ["true"] = true,
+	["false"] = true, ["nil"] = true, ["and"] = true, ["or"] = true,
+	["not"] = true,
 }
 local declared, order = {}, {}
 local function add(n)
@@ -131,34 +157,99 @@ for _, n in ipairs(order) do
 end
 src = src:sub(2, -2)
 
-local dec = fresh()
-local head = {}
-head[#head + 1] = "local " .. dec .. "=function(s,k) local t={} for i=1,#s do t[i]=string.char((string.byte(s,i)-k)%256) end return table.concat(t) end"
+local function esc3(b)
+	return string.format("\\%03d", b)
+end
 
+local head = {}
 local strs = 0
-src = src:gsub(CS1 .. "(~+)" .. CS2, function(t)
-	local raw = bank[#t]
-	if raw == nil then
-		error("obfuscator: placeholder without bank entry")
-	end
-	local k = math.random(1, 250)
-	local enc = {}
-	for i = 1, #raw do
-		enc[#enc + 1] = "\\" .. ((string.byte(raw, i) + k) % 256)
-	end
-	strs = strs + 1
-	return dec .. '("' .. table.concat(enc) .. '",' .. k .. ")"
-end)
+if not envelope then
+	local dec = fresh()
+	head[#head + 1] = "local " .. dec .. "=function(s,k) local t={} for i=1,#s do t[i]=string.char((string.byte(s,i)-k)%256) end return table.concat(t) end"
+	src = src:gsub(CS1 .. "(~+)" .. CS2, function(t)
+		local raw = bank[#t]
+		if raw == nil then
+			error("obfuscator: placeholder without matching bank entry")
+		end
+		local k = math.random(1, 250)
+		local enc = {}
+		for i = 1, #raw do
+			enc[#enc + 1] = esc3((string.byte(raw, i) + k) % 256)
+		end
+		strs = strs + 1
+		return dec .. '("' .. table.concat(enc) .. '",' .. k .. ")"
+	end)
+end
 
 for _ = 1, 3 do
 	local j = fresh()
 	head[#head + 1] = "if false then local " .. j .. "=(" .. math.random(2, 9) .. "*" .. math.random(11, 99) .. ") end"
 end
 
-local out = strict
-	.. "-- obfuscated with allison-obf v1 | locals:" .. #order .. " strings:" .. strs .. " ints:" .. ints .. "\n"
-	.. table.concat(head, "\n")
-	.. "\n"
-	.. src
-writeAll(outPath, out)
-print("wrote " .. outPath .. " locals=" .. #order .. " strings=" .. strs .. " ints=" .. ints)
+if envelope then
+	for i = 1, #bank do
+		strs = strs + 1
+	end
+	local function reliteral(s)
+		local o = {}
+		for i = 1, #s do
+			local b = string.byte(s, i)
+			if b == 34 then
+				o[#o + 1] = '\\"'
+			elseif b == 92 then
+				o[#o + 1] = "\\\\"
+			elseif b < 32 or b > 126 then
+				o[#o + 1] = string.format("\\%03d", b)
+			else
+				o[#o + 1] = string.char(b)
+			end
+		end
+		return '"' .. table.concat(o) .. '"'
+	end
+	src = src:gsub(CS1 .. "(~+)" .. CS2, function(t)
+		local e = bank[#t]
+		if e == nil then
+			error("obfuscator: placeholder without matching bank entry")
+		end
+		return reliteral(e)
+	end)
+	local inner = strict .. table.concat(head, "\n") .. "\n" .. src
+	local k0 = math.random(1, 250)
+	local step = math.random(1, 100)
+	local kx = math.random(200, 2000)
+	local sx = math.random(200, 2000)
+	local sum = 0
+	for i = 1, #inner do
+		sum = (sum + string.byte(inner, i)) % 4294967296
+	end
+	local nk, ns, nd, nt, nc, nh, nl = fresh(), fresh(), fresh(), fresh(), fresh(), fresh(), fresh()
+	local chunks, CH = {}, 4000
+	for i = 1, #inner, CH do
+		local part = {}
+		local stop = math.min(i + CH - 1, #inner)
+		for j = i, stop do
+			part[#part + 1] = esc3((string.byte(inner, j) + k0 + j * step) % 256)
+		end
+		chunks[#chunks + 1] = '"' .. table.concat(part) .. '"'
+	end
+	local out = "-- obfuscated with allison-obf v2 (envelope) | locals:" .. #order .. " strings:" .. strs .. " ints:" .. ints .. "\n"
+		.. "local " .. nk .. "=(" .. (k0 + kx) .. "-" .. kx .. ")\n"
+		.. "local " .. ns .. "=(" .. (step + sx) .. "-" .. sx .. ")\n"
+		.. "local " .. nd .. "=" .. table.concat(chunks, "..") .. "\n"
+		.. "local " .. nt .. "={} for " .. nl .. "=1,#" .. nd .. " do " .. nt .. "[" .. nl .. "]=string.char((string.byte(" .. nd .. "," .. nl .. ")-" .. nk .. "-" .. nl .. "*" .. ns .. ")%256) end\n"
+		.. "local " .. nc .. "=table.concat(" .. nt .. ")\n"
+		.. "if #" .. nc .. "~=" .. #inner .. " then error(\"bad payload\") end\n"
+		.. "local " .. nh .. "=0 for " .. nl .. "=1,#" .. nc .. " do " .. nh .. "=(" .. nh .. "+string.byte(" .. nc .. "," .. nl .. "))%4294967296 end\n"
+		.. "if " .. nh .. "~=" .. sum .. " then error(\"bad payload\") end\n"
+		.. "assert((loadstring or load)(" .. nc .. "))()"
+	writeAll(outPath, out)
+	print("wrote " .. outPath .. " mode=envelope locals=" .. #order .. " strings=" .. strs .. " ints=" .. ints .. " bytes=" .. #inner)
+else
+	local out = strict
+		.. "-- obfuscated with allison-obf v1 | locals:" .. #order .. " strings:" .. strs .. " ints:" .. ints .. "\n"
+		.. table.concat(head, "\n")
+		.. "\n"
+		.. src
+	writeAll(outPath, out)
+	print("wrote " .. outPath .. " mode=raw locals=" .. #order .. " strings=" .. strs .. " ints=" .. ints)
+end
